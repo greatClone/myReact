@@ -65,6 +65,12 @@
   function replaceChild(nextNode, prevNode) {
     prevNode.parentNode.replaceChild(nextNode, prevNode);
   }
+  function removeChild(container, node) {
+    container.removeChild(node);
+  }
+  function insertBefore(parentNode, node, referenceNode) {
+    parentNode.insertBefore(node, referenceNode);
+  }
 
   class ReactTextComponent {
     constructor(element) {
@@ -82,7 +88,12 @@
     }
 
     //  更新
-    updateComponent() {}
+    updateComponent(nextElement) {
+      const { content } = nextElement;
+      const nextNode = document.createTextNode(content);
+      replaceChild(nextNode, this._hostNode);
+      this._hostNode = nextNode;
+    }
 
     //  卸载
     unmountComponent() {
@@ -179,7 +190,9 @@
     batchUpdateNum++;
 
     // 排序
+    dirtyComponent.sort((a, b) => b._mountOrder - a._mountOrder);
     // 更新
+
     dirtyComponent.forEach((component) => {
       if (component._batchUpdateNum === batchUpdateNum) {
         component.updateComponent();
@@ -240,6 +253,7 @@
     constructor(element) {
       this._currentElement = element;
       this._hostNode = null;
+      this._renderChildren = {};
     }
 
     // 挂载
@@ -291,15 +305,120 @@
         return;
       }
       const parentNode = this._hostNode;
-      children.forEach((child) => {
-        const componentInstance = instantiateReactComponent(child);
-        const childDom = componentInstance.mountComponent();
-        appendChild(parentNode, childDom);
+      // 获取所有的子节点
+      const images = [];
+      const childrenMap = this._getFlatChildrenMap(children);
+      Object.entries(childrenMap).forEach(([key, element], index) => {
+        const componentInstance = instantiateReactComponent(element);
+        const childNode = componentInstance.mountComponent();
+        images.push(childNode);
+        componentInstance._mountIndex = index;
+        this._renderChildren[key] = componentInstance;
+      });
+
+      // 挂载
+      images.forEach((child) => {
+        appendChild(parentNode, child);
       });
     }
 
+    // 获取children map
+    _getFlatChildrenMap = (children) => {
+      const map = {};
+      children.forEach((child, index) => {
+        if (Array.isArray(child)) {
+          child.forEach((subChild, subIndex) => {
+            const key = `.${index}:${subChild.key ? '$' + subChild.key : subIndex}`;
+            map[key] = subChild;
+          });
+          return;
+        }
+        const key = `.${child.key ? '$' + child.key : index}`;
+        map[key] = child;
+      });
+      return map;
+    };
+
+    // 获取 dom 元素
+    _getDomProps = (element) => {
+      const { children, ...domProps } = element.props;
+      return domProps;
+    };
+
     //  更新
-    updateComponent() {}
+    updateComponent(nextElement) {
+      // 更新 dom 属性
+      const prevProps = this._getDomProps(this._currentElement);
+      const nextProps = this._getDomProps(nextElement);
+      this.updateProperties(prevProps, nextProps);
+
+      // 更新子元素
+      this.updateChildren(nextElement);
+    }
+    updateChildren = (nextElement) => {
+      const prevChildren = this._renderChildren;
+      const nextElementMap = this._getFlatChildrenMap(nextElement.props.children);
+      let lastIndex = 0;
+      let lastComponent = null;
+      const queue = [];
+      // 遍历新数组，完成新增及移动的标记
+      Object.entries(nextElementMap).forEach(([key, nextElement], index) => {
+        const prevComponent = prevChildren[key];
+        if (prevComponent) {
+          prevComponent.updateComponent(nextElement);
+          if (prevComponent._mountIndex < lastIndex) {
+            // 移动
+            queue.push({
+              type: 'MOVE',
+              component: prevComponent,
+              lastComponent,
+            });
+          }
+          lastIndex = Math.max(prevComponent._mountIndex, lastIndex);
+          prevComponent._mountIndex = index;
+          lastComponent = prevComponent;
+          return;
+        }
+
+        // 新增
+        const componentInstance = instantiateReactComponent(nextElement);
+        componentInstance.mountComponent();
+        componentInstance._mountIndex = index;
+        this._renderChildren[key] = componentInstance;
+        queue.push({
+          type: 'INSERT',
+          component: componentInstance,
+          lastComponent,
+        });
+        lastComponent = componentInstance;
+      });
+
+      // 遍历老数组，完成删除的标记
+      Object.keys(this._renderChildren).forEach((key) => {
+        if (!Reflect.has(nextElementMap, key)) {
+          queue.push({
+            type: 'REMOVE',
+            component: this._renderChildren[key],
+          });
+          Reflect.deleteProperty(this._renderChildren, key);
+        }
+      });
+
+      // 处理更新
+      queue.forEach((action) => {
+        switch (action.type) {
+          case 'REMOVE':
+            const removeNode = action.component._hostNode;
+            removeChild(this._hostNode, removeNode);
+            break;
+          case 'INSERT':
+          case 'MOVE':
+            const nextNode = action.component._hostNode;
+            const referenceNode = action.lastComponent._hostNode.nextSibling;
+            insertBefore(this._hostNode, nextNode, referenceNode);
+        }
+      });
+    };
 
     //  卸载
     unmountComponent() {
@@ -317,11 +436,43 @@
     },
   };
 
+  function shouldUpdateReactComponent(prevElement, nextElement) {
+    const isSameType = prevElement.type === nextElement.type;
+    const isSameKey = prevElement.key === nextElement.key;
+    return isSameKey && isSameType;
+  }
+
+  class CallbackQueue {
+    constructor() {
+      this.callbacks = [];
+      this.contexts = [];
+    }
+    reset() {
+      this.callbacks = [];
+      this.contexts = [];
+    }
+    queue(callback, context) {
+      this.callbacks.push(callback);
+      this.contexts.push(context);
+    }
+    notifyAll() {
+      const callbacks = this.callbacks;
+      const contexts = this.contexts;
+      callbacks.forEach((callback, index) => {
+        callback.call(contexts[index]);
+      });
+      this.reset();
+    }
+  }
+  var CallbackQueue$1 = new CallbackQueue();
+
+  let mountOrder = 0;
   class ReactCompositeComponent {
     constructor(element) {
       this._currentElement = element;
       this._hostNode = null;
-      this._pendingState = null;
+      this._pendingState = [];
+      this._renderComponent = null;
     }
 
     // 挂载
@@ -332,6 +483,11 @@
       const componentInstance = instantiateReactComponent(element);
       node = componentInstance.mountComponent();
       this._hostNode = node;
+      this._renderComponent = componentInstance;
+      this._mountOrder = mountOrder++;
+      if (this._publicInstance.componentDidMount) {
+        CallbackQueue$1.queue(this._publicInstance.componentDidMount, this._publicInstance);
+      }
       return node;
     }
     getValidatedElement() {
@@ -359,13 +515,25 @@
       const publicInstance = this._publicInstance;
       publicInstance.state = nextState;
       const nextElement = publicInstance.render();
-
+      this.updateRenderComponent(nextElement);
       // 清理
-      const instance = instantiateReactComponent(nextElement);
-      const nextNode = instance.mountComponent();
-      replaceChild(nextNode, this._hostNode);
       this._batchUpdateNum = null;
     }
+    updateRenderComponent = (nextElement) => {
+      const prevComponent = this._renderComponent;
+      const prevElement = prevComponent._currentElement;
+      // 如果类型不同, 卸载老的，加载新的
+      if (!shouldUpdateReactComponent(prevElement, nextElement)) {
+        const nextComponentInstance = instantiateReactComponent(nextElement);
+        const nextNode = nextComponentInstance.mountComponent();
+        replaceChild(nextNode, this._hostNode);
+        this._hostNode = nextNode;
+        this._renderComponent = nextComponentInstance;
+        return;
+      }
+      // 如果类型相同, 则对老组件进行更新
+      prevComponent.updateComponent(nextElement);
+    };
     getNextState = () => {
       const publicInstance = this._publicInstance;
       const nextState = this._pendingState.reduce(
@@ -405,13 +573,26 @@
     return new ReactCompositeComponent(element);
   }
 
-  function render(element, container) {
+  function mount(element, container) {
     // 根据类型生成不同的操作实例
     const componentInstance = instantiateReactComponent(element);
     // 调用实例的mountComponent 生成真实的dom
     const node = componentInstance.mountComponent();
     // 挂载
     appendChild(container, node);
+  }
+  const ON_DOM_READY = {
+    initialize: () => {},
+    close: () => {
+      CallbackQueue$1.notifyAll();
+    },
+  };
+  function initRender(element, container) {
+    const domTransaction = new Transaction([ON_DOM_READY]);
+    domTransaction.perform(mount, null, element, container);
+  }
+  function render(element, container) {
+    batchUpdateStrategy.batchUpdate(initRender, element, container);
   }
 
   var ReactDom = {
@@ -433,13 +614,53 @@
   //   return element;
   // }
 
+  class Test extends React.Component {
+    constructor() {
+      super();
+      this.state = {
+        a: 3,
+      };
+    }
+    componentDidMount() {
+      console.log('子节点挂载');
+      this.setState({
+        a: 8,
+      });
+      // console.log("子节点", this.state.a);
+    }
+
+    render() {
+      console.log('render--');
+      return /*#__PURE__*/ React.createElement(
+        'div',
+        {
+          onClick: () =>
+            this.setState({
+              a: 4,
+            }),
+        },
+        '\u6211\u662F Test,',
+        this.state.a,
+        ' ',
+      );
+    }
+  }
   class ClassComponent extends React.Component {
     constructor() {
       super();
       this.state = {
         a: 1,
+        arr: [1, 3, 5],
       };
     }
+    componentDidMount() {
+      console.log('父节点挂载');
+      this.setState({
+        a: 6,
+      });
+      // console.log("父节点", this.state.a);
+    }
+
     render() {
       return /*#__PURE__*/ React.createElement(
         'div',
@@ -449,22 +670,8 @@
             color: 'red',
           },
         },
-        'hello world',
-        /*#__PURE__*/ React.createElement(
-          'h1',
-          {
-            onClick: () => {
-              setTimeout(() => {
-                this.setState({
-                  a: 2,
-                });
-                console.log(333444, this.state.a);
-              }, 1000);
-            },
-          },
-          'hello world ',
-          this.state.a,
-        ),
+        /*#__PURE__*/ React.createElement('h1', null, 'hello world -- ', this.state.a),
+        /*#__PURE__*/ React.createElement(Test, null),
       );
     }
   }

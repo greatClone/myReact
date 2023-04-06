@@ -18,7 +18,9 @@ function flushBatchUpdate() {
   batchUpdateNum++;
 
   // 排序
+  dirtyComponent.sort((a, b) => b._mountOrder - a._mountOrder);
   // 更新
+
   dirtyComponent.forEach((component) => {
     if (component._batchUpdateNum === batchUpdateNum) {
       component.updateComponent();

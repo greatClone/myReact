@@ -16,28 +16,51 @@ import ReactDom from "./reactDom";
 //   return element;
 // }
 
+class Test extends React.Component {
+  constructor() {
+    super();
+    this.state = {
+      a: 3,
+    };
+  }
+  componentDidMount() {
+    console.log("子节点挂载");
+    this.setState({ a: 8 });
+    // console.log("子节点", this.state.a);
+  }
+  render() {
+    console.log("render--");
+    return (
+      <div onClick={() => this.setState({ a: 4 })}>
+        我是 Test,{this.state.a}{" "}
+      </div>
+    );
+  }
+}
+
 class ClassComponent extends React.Component {
   constructor() {
     super();
     this.state = {
       a: 1,
+      arr: [1, 3, 5],
     };
+  }
+
+  componentDidMount() {
+    console.log("父节点挂载");
+    this.setState({ a: 6 });
+    // console.log("父节点", this.state.a);
   }
 
   render() {
     return (
       <div className={"text"} style={{ color: "red" }}>
-        hello world
-        <h1
-          onClick={() => {
-            setTimeout(() => {
-              this.setState({ a: 2 });
-              console.log(333444, this.state.a);
-            }, 1000);
-          }}
-        >
-          hello world {this.state.a}
-        </h1>
+        <h1>hello world -- {this.state.a}</h1>
+        {/*{this.state.arr.map((item) => (*/}
+        {/*  <h1 key={item}>{item}</h1>*/}
+        {/*))}*/}
+        <Test />
       </div>
     );
   }

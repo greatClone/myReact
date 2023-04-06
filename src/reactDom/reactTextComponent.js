@@ -1,3 +1,5 @@
+import { replaceChild } from "./domOperations";
+
 export default class ReactTextComponent {
   constructor(element) {
     this._currentElement = element;
@@ -14,7 +16,12 @@ export default class ReactTextComponent {
   }
 
   //  更新
-  updateComponent() {}
+  updateComponent(nextElement) {
+    const { content } = nextElement;
+    const nextNode = document.createTextNode(content);
+    replaceChild(nextNode, this._hostNode);
+    this._hostNode = nextNode;
+  }
 
   //  卸载
   unmountComponent() {
