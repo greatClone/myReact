@@ -2,7 +2,6 @@ import instantiateReactComponent from "./instantiateReactComponent";
 import reactUpdateQueue from "./reactUpdateQueue";
 import { replaceChild } from "./domOperations";
 import shouldUpdateReactComponent from "./shouldUpdateReactComponent";
-import CallbackQueue from "./callbackQueue";
 
 let mountOrder = 0;
 
@@ -12,6 +11,7 @@ export default class ReactCompositeComponent {
     this._hostNode = null;
     this._pendingState = [];
     this._renderComponent = null;
+    this._mountOrder = 0;
   }
 
   // 挂载
@@ -21,18 +21,9 @@ export default class ReactCompositeComponent {
     const element = this.getValidatedElement();
     const componentInstance = instantiateReactComponent(element);
     node = componentInstance.mountComponent();
-
     this._hostNode = node;
     this._renderComponent = componentInstance;
     this._mountOrder = mountOrder++;
-
-    if (this._publicInstance.componentDidMount) {
-      CallbackQueue.queue(
-        this._publicInstance.componentDidMount,
-        this._publicInstance
-      );
-    }
-
     return node;
   }
 
@@ -66,26 +57,25 @@ export default class ReactCompositeComponent {
     const publicInstance = this._publicInstance;
     publicInstance.state = nextState;
     const nextElement = publicInstance.render();
-    this.updateRenderComponent(nextElement);
+    this.renderUpdateComponent(nextElement);
+
     // 清理
     this._batchUpdateNum = null;
   }
 
-  updateRenderComponent = (nextElement) => {
-    const prevComponent = this._renderComponent;
-    const prevElement = prevComponent._currentElement;
-    // 如果类型不同, 卸载老的，加载新的
+  renderUpdateComponent(nextElement) {
+    const prevElement = this._renderComponent._currentElement;
     if (!shouldUpdateReactComponent(prevElement, nextElement)) {
-      const nextComponentInstance = instantiateReactComponent(nextElement);
-      const nextNode = nextComponentInstance.mountComponent();
-      replaceChild(nextNode, this._hostNode);
-      this._hostNode = nextNode;
-      this._renderComponent = nextComponentInstance;
+      const componentInstance = instantiateReactComponent(nextElement);
+      const node = componentInstance.mountComponent();
+      replaceChild(node, this._hostNode);
+      this._hostNode = node;
+      this._renderComponent = componentInstance;
       return;
     }
-    // 如果类型相同, 则对老组件进行更新
-    prevComponent.updateComponent(nextElement);
-  };
+
+    this._renderComponent.updateComponent(nextElement);
+  }
 
   getNextState = () => {
     const publicInstance = this._publicInstance;

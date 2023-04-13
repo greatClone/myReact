@@ -1,6 +1,7 @@
 import instantiateReactComponent from "./instantiateReactComponent";
 import { appendChild, insertBefore, removeChild } from "./domOperations";
 import { addEvent } from "./reactEventListener";
+import shouldUpdateReactComponent from "./shouldUpdateReactComponent";
 
 export default class ReactDomComponent {
   constructor(element) {
@@ -62,26 +63,21 @@ export default class ReactDomComponent {
       return;
     }
     const parentNode = this._hostNode;
-    // 获取所有的子节点
-    const images = [];
-    const childrenMap = this._getFlatChildrenMap(children);
-    Object.entries(childrenMap).forEach(([key, element], index) => {
+
+    const childrenMap = this.getChildrenMap(children);
+
+    Object.keys(childrenMap).forEach((key, index) => {
+      const element = childrenMap[key];
       const componentInstance = instantiateReactComponent(element);
       const childNode = componentInstance.mountComponent();
-      images.push(childNode);
-      componentInstance._mountIndex = index;
       this._renderChildren[key] = componentInstance;
-    });
-
-    // 挂载
-    images.forEach((child) => {
-      appendChild(parentNode, child);
+      this._mountIndex = index;
+      appendChild(parentNode, childNode);
     });
   }
 
-  // 获取children map
-  _getFlatChildrenMap = (children) => {
-    const map = {};
+  getChildrenMap = (children) => {
+    let map = {};
     children.forEach((child, index) => {
       if (Array.isArray(child)) {
         child.forEach((subChild, subIndex) => {
@@ -90,44 +86,51 @@ export default class ReactDomComponent {
           }`;
           map[key] = subChild;
         });
-        return;
+      } else if (child) {
+        const key = `.${child.key ? "$" + child.key : index}`;
+        map[key] = child;
       }
-      const key = `.${child.key ? "$" + child.key : index}`;
-      map[key] = child;
     });
     return map;
   };
 
-  // 获取 dom 元素
-  _getDomProps = (element) => {
-    const { children, ...domProps } = element.props;
-    return domProps;
+  getDomProps = (element) => {
+    const { children, ...otherProps } = element;
+    return otherProps;
   };
 
   //  更新
   updateComponent(nextElement) {
-    // 更新 dom 属性
-    const prevProps = this._getDomProps(this._currentElement);
-    const nextProps = this._getDomProps(nextElement);
+    // 更新属性
+    const prevProps = this.getDomProps(this._currentElement);
+    const nextProps = this.getDomProps(nextElement);
     this.updateProperties(prevProps, nextProps);
 
     // 更新子元素
-    this.updateChildren(nextElement);
+    this.renderChildrenDiff(nextElement);
   }
 
-  updateChildren = (nextElement) => {
-    const prevChildren = this._renderChildren;
-    const nextElementMap = this._getFlatChildrenMap(nextElement.props.children);
+  renderChildrenDiff(nextElement) {
+    const prevComponentMap = this._renderChildren;
+    const nextElementMap = this.getChildrenMap(nextElement.props.children);
+
+    console.log(1111, prevComponentMap);
+    console.log(222, nextElementMap);
+
     let lastIndex = 0;
     let lastComponent = null;
-    const queue = [];
-    // 遍历新数组，完成新增及移动的标记
+    let queue = [];
+
+    // 遍历新数组，完成 新增 和 复用
     Object.entries(nextElementMap).forEach(([key, nextElement], index) => {
-      const prevComponent = prevChildren[key];
-      if (prevComponent) {
+      const prevComponent = prevComponentMap[key];
+      // 复用
+      if (
+        prevComponent &&
+        shouldUpdateReactComponent(prevComponent._currentElement, nextElement)
+      ) {
         prevComponent.updateComponent(nextElement);
-        if (prevComponent._mountIndex < lastIndex) {
-          // 移动
+        if (lastIndex > 0 && prevComponent._mountIndex < lastIndex) {
           queue.push({
             type: "MOVE",
             component: prevComponent,
@@ -135,50 +138,56 @@ export default class ReactDomComponent {
           });
         }
         lastIndex = Math.max(prevComponent._mountIndex, lastIndex);
-        prevComponent._mountIndex = index;
         lastComponent = prevComponent;
+        prevComponent._mountIndex = index;
         return;
       }
-
       // 新增
-      const componentInstance = instantiateReactComponent(nextElement);
-      componentInstance.mountComponent();
-      componentInstance._mountIndex = index;
-      this._renderChildren[key] = componentInstance;
+      const nextComponentInstance = instantiateReactComponent(nextElement);
+      nextComponentInstance.mountComponent();
       queue.push({
         type: "INSERT",
-        component: componentInstance,
+        component: nextComponentInstance,
         lastComponent,
       });
-      lastComponent = componentInstance;
+      lastComponent = nextComponentInstance;
+      nextComponentInstance._mountIndex = index;
+      this._renderChildren[key] = nextComponentInstance;
     });
 
-    // 遍历老数组，完成删除的标记
-    Object.keys(this._renderChildren).forEach((key) => {
+    // 遍历老数组，完成 删除
+    Object.keys(prevComponentMap).forEach((key) => {
       if (!Reflect.has(nextElementMap, key)) {
         queue.push({
           type: "REMOVE",
-          component: this._renderChildren[key],
+          component: prevComponentMap[key],
         });
         Reflect.deleteProperty(this._renderChildren, key);
       }
     });
 
-    // 处理更新
+    console.log(9999, queue);
+
+    // 统一挂载
+    const parentNode = this._hostNode;
     queue.forEach((action) => {
       switch (action.type) {
         case "REMOVE":
-          const removeNode = action.component._hostNode;
-          removeChild(this._hostNode, removeNode);
+          removeChild(parentNode, action.component._hostNode);
           break;
         case "INSERT":
         case "MOVE":
-          const nextNode = action.component._hostNode;
-          const referenceNode = action.lastComponent._hostNode.nextSibling;
-          insertBefore(this._hostNode, nextNode, referenceNode);
+          const node = action.component._hostNode;
+          const referenceNode =
+            action.lastComponent?._hostNode.nextSibling ||
+            parentNode.firstChild;
+          insertBefore(parentNode, node, referenceNode);
+          break;
+        default:
+          break;
       }
     });
-  };
+  }
 
   //  卸载
   unmountComponent() {

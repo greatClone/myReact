@@ -17,10 +17,11 @@ export default class ReactTextComponent {
 
   //  更新
   updateComponent(nextElement) {
+    let textNode = null;
     const { content } = nextElement;
-    const nextNode = document.createTextNode(content);
-    replaceChild(nextNode, this._hostNode);
-    this._hostNode = nextNode;
+    textNode = document.createTextNode(content);
+    replaceChild(textNode, this._hostNode);
+    this._hostNode = textNode;
   }
 
   //  卸载
